@@ -71,7 +71,7 @@ namespace Sample.WebApi.Controllers
 
         [Route("getToken")]
         [HttpPost]
-        public async Task<IHttpActionResult> GetToken([FromBody] LoginModel loginModel)
+        public async Task<IHttpActionResult> GetToken([FromBody] Sample.Application.ViewModels.LoginModel loginModel)
         {
             UserSecurityInformation userSecurityInformation = new UserSecurityInformation { UserInformation = new UserInformation() };
             if (string.IsNullOrEmpty(loginModel.UserName) || string.IsNullOrEmpty(loginModel.Password))

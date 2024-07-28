@@ -50,7 +50,7 @@ namespace Sample.Application.Services
         }
         #endregion
 
-        public async Task<ServiceResult<DictionaryValueViewModel>> GetTokenFromApi(Sample.Application.LoginModel loginModel)
+        public async Task<ServiceResult<DictionaryValueViewModel>> GetTokenFromApi(Sample.Application.ViewModels.LoginModel loginModel)
         {
             var serviceResult = new ServiceResult<DictionaryValueViewModel>();
             UserSecurityInformation userSecurityInformation = new UserSecurityInformation { UserInformation = new UserInformation() };

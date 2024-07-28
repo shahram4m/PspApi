@@ -9,7 +9,7 @@ namespace Sample.Web.Migrations
     {
         public Configuration()
         {
-            AutomaticMigrationsEnabled = false;
+            AutomaticMigrationsEnabled = true;
         }
 
         protected override void Seed(Sample.Core.Data.Database.DataContext context)

@@ -1,4 +1,4 @@
-﻿namespace Sample.Application
+﻿namespace Sample.Application.ViewModels
 {
     public class LoginModel
     {
