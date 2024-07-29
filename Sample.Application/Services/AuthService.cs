@@ -13,12 +13,44 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using System.Web;
 using System.Web.Configuration;
 using Zcf.Data;
+using Autofac.Integration.Mvc;
+using log4net;
+using Microsoft.IdentityModel.Tokens;
+using PSP.Data;
+using PSP.Entities;
+using PSP.Models.ApplicationPermission;
+using PSP.Security;
+using PSP.Services;
+using Sample.Application;
+using Sample.Application.Services;
+using Sample.Core.Api;
+using Sample.Core.Api.Controllers;
+using Sample.Core.Utilities;
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.IdentityModel.Tokens.Jwt;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading.Tasks;
+using System.Web;
+using System.Web.Configuration;
+using System.Web.Mvc;
+using Zcf.Data;
+using Zcf.Resources;
+using Task = System.Threading.Tasks.Task;
+
 
 namespace Sample.Application.Services
 {
@@ -50,9 +82,9 @@ namespace Sample.Application.Services
         }
         #endregion
 
-        public async Task<ServiceResult<DictionaryValueViewModel>> GetTokenFromApi(Sample.Application.ViewModels.LoginModel loginModel)
+        public async Task<ServiceResult<CustomResult<string>>> GetTokenFromApi(Sample.Application.ViewModels.LoginModel loginModel)
         {
-            var serviceResult = new ServiceResult<DictionaryValueViewModel>();
+            var serviceResult = new ServiceResult<CustomResult<string>>();
             UserSecurityInformation userSecurityInformation = new UserSecurityInformation { UserInformation = new UserInformation() };
             return await Task.Run(() =>
             {
@@ -75,39 +107,38 @@ namespace Sample.Application.Services
                     ref userSecurityInformation))
                 {
                     long organizationId = userSecurityInformation.UserInformation.OrganizationId;
-                    serviceResult.Data = new DictionaryValueViewModel
+                    serviceResult.Data = new CustomResult<string>
                     {
-                        Value = "1"
+                        Result = $"{this.GenerateToken(loginModel.UserName)}"
                     };
                 }
-                
-                HttpContext.Current.Session["UserSecurityToken"] = userSecurityInformation;
                 return serviceResult;
             });
 
         }
 
-        public async Task<ServiceResult<DictionaryValueViewModel>> GetDictionaryValue(string key)
+        public string GenerateToken(string userId)
         {
-            var serviceResult = new ServiceResult<DictionaryValueViewModel>();
+            var key = ConfigurationManager.AppSettings["JwtKey"];
+            var issuer = ConfigurationManager.AppSettings["JwtIssuer"];
+            var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key));
+            var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
 
-            var foundDictionaryItem = await UnitOfWork
-                .RepositoryAsync<Dictionary>()
-                .Query(q => q.Key == key)
-                .FirstOrDefaultAsync();
+            //Create a List of Claims, Keep claims name short    
+            var permClaims = new List<Claim>();
+            permClaims.Add(new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()));
+            permClaims.Add(new Claim("userid", userId));
 
-            if (foundDictionaryItem == null)
-            {
-                return serviceResult.SetStatus(HttpStatusCode.NotFound);
-            }
-
-            serviceResult.Data = new DictionaryValueViewModel
-            {
-                Value = foundDictionaryItem.Value
-            };
-
-            return serviceResult;
+            //Create Security Token object by giving required parameters    
+            var token = new JwtSecurityToken(issuer, //Issure    
+                            issuer,  //Audience    
+                            permClaims,
+                            expires: DateTime.Now.AddDays(1),
+                            signingCredentials: credentials);
+            var jwt_token = new JwtSecurityTokenHandler().WriteToken(token);
+            return jwt_token;
         }
+
     }
 
 

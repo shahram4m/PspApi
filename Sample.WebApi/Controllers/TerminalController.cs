@@ -24,6 +24,7 @@ using System.Web.Script.Serialization;
 using Zcf.Core.Models;
 using Zcf.Data;
 using IUnitOfWork = Zcf.Data.IUnitOfWork;
+using TerminalService = Sample.Application.Services.TerminalService;
 
 namespace Sample.WebApi.Controllers
 {
@@ -31,6 +32,7 @@ namespace Sample.WebApi.Controllers
     public class TerminalController : BaseServiceController
     {
         #region ctor
+        public TerminalService ServiceForTerminal { get; set; }
         private readonly IAccountSecurity accountSecurity;
         private readonly IOrganizationRepository organizationRepository;
         private readonly IPersonnelRepository personnelRepository;
@@ -78,14 +80,19 @@ namespace Sample.WebApi.Controllers
         [Route("GetTerminalData")]
         public async Task<IHttpActionResult> GetTerminalData([FromBody] TerminalViewModel terminalModel)
         {
-            try
+            JavaScriptSerializer js = new JavaScriptSerializer();
+            logger.InfoFormat("GetTerminalData:{0}", js.Serialize(terminalModel));
+            var serviceResult = await ServiceForTerminal.GetTerminalData(terminalModel);
+            return CreateServiceResult(serviceResult);
+
+
+          /*  try
             {
                 long personId = 0, customerId = 0;
                 JavaScriptSerializer js = new JavaScriptSerializer();
                 logger.InfoFormat("GetTerminalData:{0}", js.Serialize(terminalModel));
                 var person = this.personRepository.Query.FirstOrDefault(c => c.NationalCode == terminalModel.NationalCode);
                 var accountBankBranch = this.bankBranchRepository.Query.FirstOrDefault(c => c.BankBranchCode == terminalModel.BankBranchCode);
-
                 //create customer if not exist and merchant and terminal
                 if (person != null)
                 {
@@ -492,7 +499,10 @@ namespace Sample.WebApi.Controllers
                 logger.InfoFormat("Error occurred:{0}", Ex.ToString());
                 throw Ex;
             }
-            return this.Json(terminalModel);
+            return this.Json(terminalModel);*/
+
+
+
         }
 
     }

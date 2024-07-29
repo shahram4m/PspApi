@@ -43,6 +43,7 @@ namespace Sample.WebApi.Controllers
     {
 
         #region ctor
+        public AuthServiceService ServiceForAuth { get; set; }
         private readonly IAccountSecurity _accountSecurity;
         private readonly IOrganizationRepository _organizationRepository;
         private readonly IPersonnelRepository _personnelRepository;
@@ -78,33 +79,36 @@ namespace Sample.WebApi.Controllers
             {
                 return BadRequest();
             }
+            
+            var serviceResult = await ServiceForAuth.GetTokenFromApi(loginModel);
 
-            return await Task.Run(() =>
-            {
-                //1687c05815d6fe2ab083c072676b9e9f
-                string hashPass;
-                using (MD5 hash = MD5.Create())
-                {
-                    hashPass = String.Join
-                    (
-                        "",
-                        from ba in hash.ComputeHash
-                        (
-                            Encoding.UTF8.GetBytes(loginModel.UserName + loginModel.Password)
-                        )
-                        select ba.ToString("x2")
-                    );
-                }
+            return CreateServiceResult(serviceResult);
+            //return await Task.Run(() =>
+            //{
+            //    //1687c05815d6fe2ab083c072676b9e9f
+            //    string hashPass;
+            //    using (MD5 hash = MD5.Create())
+            //    {
+            //        hashPass = String.Join
+            //        (
+            //            "",
+            //            from ba in hash.ComputeHash
+            //            (
+            //                Encoding.UTF8.GetBytes(loginModel.UserName + loginModel.Password)
+            //            )
+            //            select ba.ToString("x2")
+            //        );
+            //    }
 
-                if (_accountSecurity.TryLogin(loginModel.UserName, hashPass, WebConfigurationManager.AppSettings["AppCodeNG"],
-                    ref userSecurityInformation))
-                {
-                    long organizationId = userSecurityInformation.UserInformation.OrganizationId;                    
-                }
-                //HttpContext.Current Session["UserSecurityToken"] = userSecurityInformation;
-                string result = $"{GenerateToken(loginModel.UserName)}";
-                return this.Json(result);
-            });
+            //    if (_accountSecurity.TryLogin(loginModel.UserName, hashPass, WebConfigurationManager.AppSettings["AppCodeNG"],
+            //        ref userSecurityInformation))
+            //    {
+            //        long organizationId = userSecurityInformation.UserInformation.OrganizationId;                    
+            //    }
+            //    //HttpContext.Current Session["UserSecurityToken"] = userSecurityInformation;
+            //    string result = $"{GenerateToken(loginModel.UserName)}";
+            //    return this.Json(result);
+            //});
         }
 
         public object GenerateToken(string userId)
