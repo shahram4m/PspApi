@@ -205,6 +205,7 @@
     <Compile Include="ViewModels\CustomResult\CustomResult.cs" />
     <Compile Include="ViewModels\CustomResult\ErrorCodes.cs" />
     <Compile Include="ViewModels\Dictionaries\DictionaryValueViewModel.cs" />
+    <Compile Include="ViewModels\Terminal\TerminalStatusViewModel.cs" />
     <Compile Include="ViewModels\Terminal\TerminalViewModel.cs" />
     <Compile Include="ViewModels\TextUpload\TextUploadResultViewModel.cs" />
     <Compile Include="ViewModels\TextUpload\TextUploadViewModel.cs" />

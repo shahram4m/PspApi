@@ -84,8 +84,6 @@ namespace Sample.WebApi.Controllers
             logger.InfoFormat("GetTerminalData:{0}", js.Serialize(terminalModel));
             var serviceResult = await ServiceForTerminal.GetTerminalData(terminalModel);
             return CreateServiceResult(serviceResult);
-
-
           /*  try
             {
                 long personId = 0, customerId = 0;
@@ -505,5 +503,16 @@ namespace Sample.WebApi.Controllers
 
         }
 
+
+        [Authorize]
+        [HttpPost]
+        [Route("GetTerminalStatus")]
+        public async Task<IHttpActionResult> GetTerminalStatus([FromBody] string trackId)
+        {
+            JavaScriptSerializer js = new JavaScriptSerializer();
+            logger.InfoFormat("GetTerminalStatus:{0}", js.Serialize(trackId));
+            var serviceResult = await ServiceForTerminal.GetTerminalStatus(trackId);
+            return CreateServiceResult(serviceResult);
+        }
     }
 }

@@ -71,12 +71,13 @@ using PSP.Common.Enum;
 using PSP.Common;
 using PSP.Models.Terminal;
 using PSP.Models.AsanparkhatModel;
+using Sample.Application.ViewModels.Terminal;
 
 namespace Sample.Application.Services
 {
     public class TerminalService : BaseService
     {
-        #region ctor
+
         #region ctor
         private readonly IAccountSecurity accountSecurity;
         private readonly IOrganizationRepository organizationRepository;
@@ -102,8 +103,7 @@ namespace Sample.Application.Services
             ITerminalRepository terminalRepository,
             IBankAccountRepository bankAccountRepository,
             IBankBranchRepository bankBranchRepository,
-            ILog logger
-            )
+            ILog logger)
         {
             this.unitOfWork = unitOfWork;
             this.userService = userService;
@@ -119,7 +119,6 @@ namespace Sample.Application.Services
             this.posRepository = posRepository;
         }
         #endregion
-        #endregion
 
         public async Task<ServiceResult<CustomResult<int>>> GetTerminalData(Sample.Application.ViewModels.Terminal.TerminalViewModel terminalModel)
         {
@@ -134,6 +133,12 @@ namespace Sample.Application.Services
                     //logger.InfoFormat("GetTerminalData:{0}", js.Serialize(terminalModel));
                     var person = this.personRepository.Query.FirstOrDefault(c => c.NationalCode == terminalModel.NationalCode);
                     var accountBankBranch = this.bankBranchRepository.Query.FirstOrDefault(c => c.BankBranchCode == terminalModel.BankBranchCode);
+                    var agent = accountBankBranch.BankBranchAgentActitvity.FirstOrDefault();
+                    string marketerNationalCode = ConfigurationManager.AppSettings["Marketer"].ToString();
+
+                    var marketer = this.personRepository.Query
+                    .FirstOrDefault(c => c.NationalCode == marketerNationalCode).Marketers.FirstOrDefault();
+
                     //create customer if not exist and merchant and terminal
                     if (person != null)
                     {
@@ -176,12 +181,11 @@ namespace Sample.Application.Services
                                 editBankAccount.LastUpdateTime = DateTime.Now;
                                 editBankAccount.LastUpdateUserName = "Api";
                             }
-
                             existTerminal.LastUpdateTime = DateTime.Parse(terminalModel.CreateTime);
                             existTerminal.LastUpdateUserName = "Api";
                             existTerminal.Location = new Location();
                             existTerminal.BankAccountMain = editBankAccount;
-                            existTerminal.AgentId = terminalModel.AgentId;
+                            existTerminal.AgentId = agent?.AgentId ?? 28;
                             existTerminal.BankBranchId = accountBankBranch?.Id;
                             existTerminal.TerminalOrganizationId = accountBankBranch?.BankBranchOrganizationId ?? 0;
                             existTerminal.TerminalStatusId = terminalModel.TerminalStatusId;
@@ -189,12 +193,12 @@ namespace Sample.Application.Services
                             existTerminal.Description = "import from Api";
                             existTerminal.EntityId = Guid.NewGuid();
                             existTerminal.IsDisabled = false;
-                            existTerminal.MarketerProjectId = 1;
+                            existTerminal.MarketerProjectId = 285;
                             existTerminal.PriorityId = terminalModel.PriorityId;
                             existTerminal.PosTypeId = terminalModel.PosTypeId;
                             existTerminal.PosTransactionProfileId = 1;
                             existTerminal.TerminalTypeId = terminalModel.TerminalTypeId;
-                            existTerminal.MarketerId = !string.IsNullOrEmpty(terminalModel.MarketerCode) ? long.Parse(terminalModel.MarketerCode) : 0;
+                            existTerminal.MarketerId = marketer?.Id ?? 1; //string.IsNullOrEmpty(terminalModel.MarketerCode) ? long.Parse(terminalModel.MarketerCode) : 0;
                             existTerminal.SwitchId = terminalModel.SwitchId;
                             existTerminal.IsDamaged = false;
                             existTerminal.HasForceInstallationPermit = false;
@@ -303,7 +307,7 @@ namespace Sample.Application.Services
                                 OldTerminalId = terminalModel.TrackId.ToString(),
                                 //CollectionDate = !string.IsNullOrEmpty(terminalModel.CollectionDate) ? DateTime.Parse(terminalModel.CollectionDate) : (DateTime?)null,
                                 //AgentInstallingDate = !string.IsNullOrEmpty(terminalModel.InstallDate) ? DateTime.Parse(terminalModel.InstallDate) : (DateTime?)null,
-                                AgentId = terminalModel.AgentId,
+                                AgentId = agent?.AgentId ?? 28,
                                 BankBranchId = accountBankBranch.Id,
                                 TerminalOrganizationId = accountBankBranch.BankBranchOrganizationId,
                                 TerminalStatusId = terminalModel.TerminalStatusId,
@@ -311,7 +315,7 @@ namespace Sample.Application.Services
                                 Description = "import from Api",
                                 EntityId = Guid.NewGuid(),
                                 IsDisabled = false,
-                                MarketerProjectId = terminalModel.MarketerProjectId,
+                                MarketerProjectId = 285,
                                 PriorityId = terminalModel.PriorityId,
                                 PosTypeId = terminalModel.PosTypeId,
                                 PosTransactionProfileId = 1,
@@ -319,7 +323,7 @@ namespace Sample.Application.Services
                                 //Discriminator = "Pos",
                                 MerchantCode = terminalModel.MerchantCode,
                                 TerminalCode = terminalModel.TerminalCode,
-                                MarketerId = !string.IsNullOrEmpty(terminalModel.MarketerCode) ? long.Parse(terminalModel.MarketerCode) : 0,
+                                MarketerId = marketer?.Id ?? 1, //!string.IsNullOrEmpty(terminalModel.MarketerCode) ? long.Parse(terminalModel.MarketerCode) : 0,
                                 HasForceInstallationPermit = false,
                                 IsDamaged = false,
                                 SwitchId = terminalModel.SwitchId,
@@ -368,17 +372,15 @@ namespace Sample.Application.Services
                                 terminalsModel.Merchant.Customer.Person.PassportDateOfExpiry = Convert.ToDateTime(terminalModel.PassportDateOfExpiry);
                             }
 
-
                             this.posRepository.Add(terminalsModel);
                             this.unitOfWork.Commit();
                         }
                     }
-                    //create person and customer and merchant and terminal and bankAccount**************************
+                    //  create person and customer and merchant and terminal and bankAccount************
                     else
-                    {//create person and customer and merchant and terminal and bankAccount
+                    {// create person and customer and merchant and terminal and bankAccount
                         var newBankAccount = new BankAccount();
                         newBankAccount = this.bankAccountRepository.Query.FirstOrDefault(c => c.AccountNumber == terminalModel.Account && c.AccountPersonId == personId);
-
                         if (newBankAccount == null)
                         {
                             newBankAccount = new BankAccount
@@ -396,6 +398,7 @@ namespace Sample.Application.Services
                                 LastUpdateUserName = "",
                             };
                         }
+
                         var terminalsModel = new Pos
                         {
                             CreateTime = DateTime.Parse(terminalModel.CreateTime),
@@ -407,7 +410,7 @@ namespace Sample.Application.Services
                             OldTerminalId = terminalModel.TrackId.ToString(),
                             Location = new Location(),
                             BankAccountMain = newBankAccount,
-                            AgentId = terminalModel.AgentId,
+                            AgentId = agent?.AgentId ?? 28,
                             BankBranchId = accountBankBranch?.Id,
                             TerminalOrganizationId = accountBankBranch?.BankBranchOrganizationId ?? 0,
                             TerminalStatusId = terminalModel.TerminalStatusId,
@@ -415,7 +418,7 @@ namespace Sample.Application.Services
                             Description = "import from Api",
                             EntityId = Guid.NewGuid(),
                             IsDisabled = false,
-                            MarketerProjectId = 1, //terminalModel.MarketerProjectId                        
+                            MarketerProjectId = 285,
                             PriorityId = terminalModel.PriorityId,
                             PosTypeId = terminalModel.PosTypeId,
                             PosTransactionProfileId = 1,
@@ -423,7 +426,7 @@ namespace Sample.Application.Services
                             //Discriminator = "Pos",
                             MerchantCode = terminalModel.MerchantCode,
                             TerminalCode = terminalModel.TerminalCode,
-                            MarketerId = !string.IsNullOrEmpty(terminalModel.MarketerCode) ? long.Parse(terminalModel.MarketerCode) : 0,
+                            MarketerId = marketer?.Id ?? 1, //!string.IsNullOrEmpty(terminalModel.MarketerCode) ? long.Parse(terminalModel.MarketerCode) : 0,
                             SwitchId = terminalModel.SwitchId,
                             IsDamaged = false,
                             HasForceInstallationPermit = false,
@@ -558,10 +561,61 @@ namespace Sample.Application.Services
                         ErrorMessage = Ex.ToString(),
                     };
                     return serviceResult;
-
                     //throw Ex;
                 }
             });
+        }
+
+        public async Task<ServiceResult<CustomResult<TerminalStatusViewModel>>> GetTerminalStatus(string trackId)
+        {
+            var serviceResult = new ServiceResult<CustomResult<TerminalStatusViewModel>>();
+            return await Task.Run(() =>
+            {
+                try
+                {
+                    var terminal = this.posRepository.Query.FirstOrDefault(c => c.OldTerminalId == trackId);
+                    if (terminal == null)
+                    {
+                        serviceResult.Data = new CustomResult<TerminalStatusViewModel>
+                        {
+                            Result = null,
+                            ErrorExists = true,
+                            ErrorMessage = "Pos Not exist",
+                        };
+                        return serviceResult;
+                    }
+
+                    var terminalLog = terminal.TerminalStatusLogs.FirstOrDefault(c => c.CurrentStatusId == terminal.TerminalStatusId);
+                    var resultModel = new TerminalStatusViewModel
+                    {
+                        TrackId = trackId,
+                        StatusId = terminal.TerminalStatusId,
+                        StatusTitle = terminal.TerminalStatus.Title,
+                        ModifiedAt = terminalLog?.CreateTime.ToShortDateString(),
+                        Description = terminal.Description,
+                    };
+
+                    serviceResult.Data = new CustomResult<TerminalStatusViewModel>
+                    {
+                        Result = resultModel,
+                        ErrorExists = false,
+                    };
+                    return serviceResult;
+                }
+                catch (Exception Ex)
+                {
+                    logger.InfoFormat("Error occurred:{0}", Ex.ToString());
+                    serviceResult.Data = new CustomResult<TerminalStatusViewModel>
+                    {
+                        Result = null,
+                        ErrorExists = true,
+                        ErrorMessage = Ex.ToString(),
+                    };
+                    return serviceResult;
+                }
+            });
+
+
         }
     }
 }
