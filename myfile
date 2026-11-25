@@ -1,0 +1,596 @@
+using RP.SW.Helper.Util;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Net.NetworkInformation;
+using System.Security.Cryptography;
+using System.Text;
+using System.Transactions;
+
+public static class Iso8583Parser
+{
+    private static readonly Dictionary<int, (string Type, int Length)> FieldDefinitions = new()
+    {
+        { 2, ("PAN", 19) },    { 3, ("F", 6) },     { 4, ("F", 12) },    { 7, ("F", 10) },
+        { 11, ("F", 6) },      { 12, ("F", 6) },    { 13, ("F", 4) },    { 14, ("F", 4) },
+        { 15, ("F", 4) },      { 18, ("F", 4) },    { 22, ("F", 3) },    { 23, ("F", 3) },
+        { 24, ("F", 3) },      { 25, ("F", 2) },    { 32, ("LLVAR", 11) }, { 33, ("LLVAR", 11) },
+        { 35, ("LLVAR", 37) }, { 37, ("F", 12) },   { 38, ("F", 6) },    { 39, ("F", 2) },
+        { 41, ("F", 8) },      { 42, ("F", 15) },   { 43, ("F", 40) },   { 48, ("LLLVAR", 999) },
+        { 49, ("F", 3) },      { 52, ("F", 16) },   { 54, ("LLLVAR", 120) },{ 60, ("LLLVAR", 999) },
+        { 61, ("LLLVAR", 999) },{ 62, ("LLLVAR", 999) },{ 63, ("LLLVAR", 999) }, { 90, ("F", 42) },
+        { 92, ("F", 2) },      { 95, ("F", 42) },   { 100, ("LLVAR", 11) }, { 128, ("F", 16) }
+    };
+
+    public static Dictionary<int, string> Parse(string hexMessage)
+    {
+        var parsedFields = new Dictionary<int, string>();
+        string asciiMsg = HexToAscii(hexMessage);
+        int offset = 0;
+
+        if (int.TryParse(asciiMsg.Substring(0, 4), out int headerLen) && Math.Abs(headerLen - asciiMsg.Length) < 10)
+        {
+            parsedFields.Add(0, $"TCP Header Length: {asciiMsg.Substring(0, 4)}");
+            offset += 4;
+        }
+
+        string mti = asciiMsg.Substring(offset, 4);
+        parsedFields.Add(1, mti);
+        offset += 4;
+
+        string primaryBitmapHex = asciiMsg.Substring(offset, 16);
+        offset += 16;
+        string bitmapBinary = HexToBinary(primaryBitmapHex);
+
+        if (bitmapBinary[0] == '1')
+        {
+            string secondaryBitmapHex = asciiMsg.Substring(offset, 16);
+            offset += 16;
+            bitmapBinary += HexToBinary(secondaryBitmapHex);
+        }
+
+        for (int i = 1; i < bitmapBinary.Length; i++)
+        {
+            if (bitmapBinary[i] == '1')
+            {
+                int fieldNum = i + 1;
+                if (!FieldDefinitions.ContainsKey(fieldNum))
+                {
+                    parsedFields.Add(fieldNum, "[FORMAT UNKNOWN IN DICTIONARY]");
+                    return parsedFields;
+                }
+
+                var (type, maxLength) = FieldDefinitions[fieldNum];
+
+                try
+                {
+                    string value;
+                    if (type == "F")
+                    {
+                        string rawValue = asciiMsg.Substring(offset, maxLength);
+                        value = rawValue.TrimEnd();
+                        offset += maxLength;
+                    }
+                    else if (type == "LLVAR")
+                    {
+                        int len = int.Parse(asciiMsg.Substring(offset, 2));
+                        offset += 2;
+                        value = asciiMsg.Substring(offset, len);
+                        offset += len;
+                    }
+                    else if (type == "LLLVAR")
+                    {
+                        int len = int.Parse(asciiMsg.Substring(offset, 3));
+                        offset += 3;
+                        value = asciiMsg.Substring(offset, len);
+                        offset += len;
+                    }
+                    else if (type == "PAN")
+                    {
+                        if (int.TryParse(asciiMsg.Substring(offset, 2), out int panLen) && panLen >= 16 && panLen <= 19)
+                        {
+                            offset += 2;
+                            value = asciiMsg.Substring(offset, panLen);
+                            offset += panLen;
+                        }
+                        else
+                        {
+                            value = asciiMsg.Substring(offset, 16);
+                            offset += 16;
+                        }
+                    }
+                    else
+                    {
+                        value = "[UNKNOWN FIELD TYPE]";
+                    }
+                    parsedFields.Add(fieldNum, value);
+                }
+                catch (Exception)
+                {
+                    if (FieldDefinitions.TryGetValue(fieldNum, out var def))
+                    {
+                        if (def.Type == "F") offset += def.Length;
+                        else
+                        {
+                            parsedFields.Add(fieldNum, $"[PARSING STOPPED: Data/Bitmap mismatch suspected at this field]");
+                            return parsedFields;
+                        }
+                    }
+                }
+            }
+        }
+
+        return parsedFields;
+    }
+
+    private static string HexToAscii(string hexString)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < hexString.Length; i += 2)
+        {
+            sb.Append(Convert.ToChar(Convert.ToByte(hexString.Substring(i, 2), 16)));
+        }
+        return sb.ToString();
+    }
+
+    private static string HexToBinary(string hex)
+    {
+        var binary = new StringBuilder();
+        foreach (char c in hex)
+        {
+            binary.Append(Convert.ToString(Convert.ToInt32(c.ToString(), 16), 2).PadLeft(4, '0'));
+        }
+        return binary.ToString();
+    }
+}
+
+public static class Iso8583Builder
+{
+    // اصلاح طول فیلد 42 به 15 مطابق با دامپ سرور بانک
+    private static readonly Dictionary<int, (string Type, int Length)> FieldDefinitions = new()
+    {
+        { 2, ("PAN", 19) },    { 3, ("F", 6) },     { 4, ("F", 12) },    { 7, ("F", 10) },
+        { 11, ("F", 6) },      { 12, ("F", 6) },    { 13, ("F", 4) },    { 14, ("F", 4) },
+        { 15, ("F", 4) },      { 18, ("F", 4) },    { 22, ("F", 3) },    { 23, ("F", 3) },
+        { 24, ("F", 3) },      { 25, ("F", 2) },    { 32, ("LLVAR", 11) }, { 33, ("LLVAR", 11) },
+        { 35, ("LLVAR", 37) }, { 37, ("F", 12) },   { 38, ("F", 6) },    { 39, ("F", 2) },
+        { 41, ("F", 8) },      { 42, ("F", 15) },   { 43, ("F", 40) },   { 48, ("LLLVAR", 999) },
+        { 49, ("F", 3) },      { 52, ("F", 16) },   { 54, ("LLLVAR", 120) },{ 60, ("LLLVAR", 999) },
+        { 61, ("LLLVAR", 999) },{ 62, ("LLLVAR", 999) },{ 63, ("LLLVAR", 999) }, { 90, ("F", 42) },
+        { 92, ("F", 2) },      { 95, ("F", 42) },   { 100, ("LLVAR", 11) }, { 128, ("F", 16) }
+    };
+
+    public static string Build(string mti, Dictionary<int, string> fields, bool includeTcpLength = true)
+    {
+        int maxField = fields.Keys.Max();
+        bool useSecondaryBitmap = maxField > 64;
+
+        char[] bitmapBinary = new char[useSecondaryBitmap ? 128 : 64];
+        for (int i = 0; i < bitmapBinary.Length; i++) bitmapBinary[i] = '0';
+
+        if (useSecondaryBitmap) bitmapBinary[0] = '1';
+
+        StringBuilder dataElements = new StringBuilder();
+        var sortedFields = fields.OrderBy(f => f.Key).ToList();
+
+        foreach (var field in sortedFields)
+        {
+            int fieldNum = field.Key;
+            string value = field.Value;
+
+            bitmapBinary[fieldNum - 1] = '1';
+
+            if (!FieldDefinitions.ContainsKey(fieldNum))
+                throw new Exception($"Field {fieldNum} is not defined in the dictionary.");
+
+            var def = FieldDefinitions[fieldNum];
+
+            if (def.Type == "F")
+            {
+                if (value.Length != def.Length)
+                    value = value.PadRight(def.Length, ' ');
+                dataElements.Append(value);
+            }
+            else if (def.Type == "LLVAR" || def.Type == "PAN")
+            {
+                dataElements.Append(value.Length.ToString("D2"));
+                dataElements.Append(value);
+            }
+            else if (def.Type == "LLLVAR")
+            {
+                dataElements.Append(value.Length.ToString("D3"));
+                dataElements.Append(value);
+            }
+        }
+
+        string bitmapHex = BinaryToHex(new string(bitmapBinary));
+        string messageBody = mti + bitmapHex + dataElements.ToString();
+
+        if (includeTcpLength)
+        {
+            string lengthHeader = messageBody.Length.ToString("D4");
+            messageBody = lengthHeader + messageBody;
+        }
+
+        return AsciiToHex(messageBody);
+    }
+
+    private static string BinaryToHex(string binary)
+    {
+        StringBuilder hex = new StringBuilder();
+        for (int i = 0; i < binary.Length; i += 4)
+        {
+            string nibble = binary.Substring(i, 4);
+            hex.Append(Convert.ToInt32(nibble, 2).ToString("X"));
+        }
+        return hex.ToString();
+    }
+
+    private static string AsciiToHex(string asciiString)
+    {
+        StringBuilder hex = new StringBuilder(asciiString.Length * 2);
+        foreach (char c in asciiString)
+        {
+            hex.Append(((int)c).ToString("X2"));
+        }
+        return hex.ToString();
+    }
+}
+
+public static class HexByte
+{
+    public static byte[] HexToBytes(string hex)
+    {
+        if (hex.Length % 2 != 0)
+            throw new ArgumentException("Invalid hex string");
+
+        byte[] bytes = new byte[hex.Length / 2];
+
+        for (int i = 0; i < bytes.Length; i++)
+        {
+            bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+        }
+
+        return bytes;
+    }
+
+    public static string BytesToHex(byte[] bytes)
+    {
+        StringBuilder hex = new StringBuilder(bytes.Length * 2);
+        foreach (byte b in bytes)
+        {
+            hex.Append(b.ToString("X2"));
+        }
+        return hex.ToString();
+    }
+}
+
+public class Program
+{
+    private static string CalcDesCbc(byte[] data, string keyHex, bool isoPad80)
+    {
+        byte[] key = HexByte.HexToBytes(keyHex);
+        int rem = data.Length % 8;
+        byte[] padded;
+        if (isoPad80)
+        {
+            padded = new byte[data.Length + (8 - rem)];
+            Buffer.BlockCopy(data, 0, padded, 0, data.Length);
+            padded[data.Length] = 0x80;
+        }
+        else
+        {
+            int pad = rem == 0 ? 0 : 8 - rem;
+            padded = new byte[data.Length + pad];
+            Buffer.BlockCopy(data, 0, padded, 0, data.Length);
+        }
+
+        using var des = DES.Create();
+        des.Key = key;
+        des.Mode = CipherMode.CBC;
+        des.Padding = PaddingMode.None;
+        des.IV = new byte[8];
+        using var enc = des.CreateEncryptor();
+        var res = enc.TransformFinalBlock(padded, 0, padded.Length);
+        return HexByte.BytesToHex(res[^8..]);
+    }
+
+    private static string CalcXorDes(byte[] data, string keyHex)
+    {
+        byte[] key = HexByte.HexToBytes(keyHex);
+        int pad = (data.Length % 8 == 0) ? 0 : 8 - (data.Length % 8);
+        byte[] padded = new byte[data.Length + pad];
+        Buffer.BlockCopy(data, 0, padded, 0, data.Length);
+
+        byte[] xorBlock = new byte[8];
+        for (int i = 0; i < padded.Length; i += 8)
+            for (int j = 0; j < 8; j++)
+                xorBlock[j] ^= padded[i + j];
+
+        using var des = DES.Create();
+        des.Key = key;
+        des.Mode = CipherMode.ECB;
+        des.Padding = PaddingMode.None;
+        using var enc = des.CreateEncryptor();
+        var res = enc.TransformFinalBlock(xorBlock, 0, 8);
+        return HexByte.BytesToHex(res);
+    }
+
+    private static string CreatePinBlock(string pin, string pan, string pinKeyHex)
+    {
+        string pinPart = $"0{pin.Length}{pin}".PadRight(16, 'F');
+        string panWithoutCheck = pan.Substring(0, pan.Length - 1);
+        string pan12 = panWithoutCheck.Length >= 12
+            ? panWithoutCheck.Substring(panWithoutCheck.Length - 12)
+            : panWithoutCheck.PadLeft(12, '0');
+
+        string panPart = "0000" + pan12;
+
+        byte[] pinBytes = HexByte.HexToBytes(pinPart);
+        byte[] panBytes = HexByte.HexToBytes(panPart);
+
+        byte[] clearPinBlock = new byte[8];
+        for (int i = 0; i < 8; i++)
+            clearPinBlock[i] = (byte)(pinBytes[i] ^ panBytes[i]);
+
+        byte[] pinKey = HexByte.HexToBytes(pinKeyHex);
+
+        using var des = DES.Create();
+        des.Key = pinKey;
+        des.Mode = CipherMode.ECB;
+        des.Padding = PaddingMode.None;
+
+        using var encryptor = des.CreateEncryptor();
+        byte[] encryptedPinBlock = encryptor.TransformFinalBlock(clearPinBlock, 0, 8);
+
+        return HexByte.BytesToHex(encryptedPinBlock);
+    }
+
+    public static byte[] CalculateMACVeri(byte[] mpk, byte[] message)
+    {
+        DESCryptoServiceProvider provider = new DESCryptoServiceProvider
+        {
+            Padding = PaddingMode.Zeros
+        };
+        provider.Key = mpk;
+        provider.IV = new byte[8];
+        provider.Mode = CipherMode.CBC;
+        byte[] sourceArray = provider.CreateEncryptor(mpk, new byte[8]).TransformFinalBlock(message, 0, message.Length);
+        byte[] destinationArray = new byte[8];
+
+        Array.Copy(sourceArray, /*(sourceArray.Length / 8 - 1) * 8*/ sourceArray.Length - 8, destinationArray, 0, 8);
+        return destinationArray;
+    }
+
+
+    private static byte[] CalculateMac(byte[] message, string macKeyHex)
+    {
+        byte[] key = HexByte.HexToBytes(macKeyHex);
+
+        using var des = DES.Create();
+        des.Key = key;
+        des.Mode = CipherMode.CBC;
+        des.Padding = PaddingMode.None;
+        des.IV = new byte[8];
+
+        // پدینگ ISO 9797-1 Method 2 (اضافه کردن 0x80 و سپس پر کردن با 0x00 تا مضرب 8)
+        // نکته: اگر با Method 2 مقدار 0E5D5DA19416B749 تولید نشد، خط پدینگ را به Method 1 (فقط 0x00) تغییر دهید.
+        //byte[] padded = PadIso9797Method2(message, 8);
+        byte[] padded = PadIso9797Method1(message, 8);
+
+        using var encryptor = des.CreateEncryptor();
+        var result = encryptor.TransformFinalBlock(padded, 0, padded.Length);
+
+        return result[^8..];
+    }
+
+    private static byte[] PadIso9797Method2(byte[] data, int blockSize)
+    {
+        int remainder = data.Length % blockSize;
+        int paddingLength = blockSize - remainder;
+        byte[] padded = new byte[data.Length + paddingLength];
+        Buffer.BlockCopy(data, 0, padded, 0, data.Length);
+        padded[data.Length] = 0x80; // بایت شروع پدینگ
+        return padded;
+    }
+
+    private static byte[] PadIso9797Method1(byte[] data, int blockSize)
+    {
+        int padding = blockSize - (data.Length % blockSize);
+        if (padding == blockSize) return data;
+        byte[] padded = new byte[data.Length + padding];
+        Buffer.BlockCopy(data, 0, padded, 0, data.Length);
+        return padded;
+    }
+
+    public static string BuildField48()
+    {
+        string appVer = BuildTlv("81", "31302E362E342E3133");
+        string terminalInfo = BuildTlv("6B", appVer);
+
+        string language = BuildTlv("89", "3030");
+        string miscellaneous = BuildTlv("6F", language);
+
+        string batchNo = BuildTlv("81", "31");
+        string settlementInfo = BuildTlv("62", batchNo);
+
+        string payload = terminalInfo + miscellaneous + settlementInfo;
+        return BuildTlv("71", payload);
+    }
+
+    private static string BuildTlv(string tag, string valueHex)
+    {
+        int byteLen = valueHex.Length / 2;
+        string lenHex = byteLen.ToString("X2");
+        return tag + lenHex + valueHex;
+    }
+
+    public static void Main()
+    {
+        //var pan = "5022291045047691";
+        //var pinKey = "26731FC823C802B6";
+        //var macKey = "BFB92AA7CBEC3B3D";
+        //var pinBlock = CreatePinBlock("1273", pan, pinKey);
+        //string track2 = "5022291045047691=27081205018112999839";
+
+        //Dictionary<int, string> myFields = new Dictionary<int, string>
+        //{
+        //    { 2, "5022291045047691" },
+        //    { 3, "310000" },
+        //    { 7, "0512125853" },
+        //    { 11, "125853" },
+        //    { 12, "125853" },
+        //    { 13, "0512" },
+        //    { 14, "0606" },
+        //    { 15, "0512" },
+        //    { 22, "021" },
+        //    { 23, "000" },
+        //    { 25, "43" },
+        //    { 32, "504706" },
+        //    { 35, "5022291045047691=27081205018112999839" },
+        //    { 41, "00017002" },
+        //    { 42, "01002894" },
+        //    //{ 48, BuildField48() },
+        //    { 48, "71186B0B810931302E362E342E31336F04890230306203810130" } ,
+        //    { 49, "364" },
+        //    { 52, pinBlock },
+        //    { 100, "891220000" },
+        //};
+
+
+
+
+        //// 1. قرار دادن مقدار موقت 16 کاراکتری برای فیلد 128 جهت تنظیم صحیح Bitmap ثانویه
+        //myFields[128] = "0000000000000000";
+
+        //// 2. تولید کل بدنه پیام (بدون هدر طول TCP)
+        //string hexBodyWithDummyMac = Iso8583Builder.Build("0200", myFields, includeTcpLength: false);
+        //byte[] bodyBytes = HexByte.HexToBytes(hexBodyWithDummyMac);
+
+        //// 3. حذف 16 بایت انتهایی (فیلد 128 موقت) تا دقیقا 258 بایت MAB از ابتدای 0200 تا انتهای فیلد 100 به دست آید
+        //byte[] mabBytes = bodyBytes[..^16];
+
+        //// 4. محاسبه MAC
+        //byte[] macBytes = CalculateMac(mabBytes, macKey);
+        //string mac = HexByte.BytesToHex(macBytes);
+
+        //// 5. جایگزینی MAC واقعی و ساخت پیام نهایی با هدر طول TCP
+        //myFields[128] = mac;
+        //string generatedHex = Iso8583Builder.Build("0200", myFields, includeTcpLength: true);
+
+        //Console.WriteLine($"Calculated MAC: {mac}");
+        //Console.WriteLine($"Expected MAC  : 0E5D5DA19416B749");
+        //Console.WriteLine("\nGenerated Hex String:");
+        //Console.WriteLine(generatedHex);
+
+        //var parsedFields = Iso8583Parser.Parse("3032373430323030453233453036383132304331393030303030303030303030313030303030303131363530323232393130343530343736393133313030303030353132313235383533313235383533313235383533303531323036303630353132303231303030343330363530343730363337353032323239313034353034373639313D32373038313230353031383131323939393833393030303137303032303130303238393420202020202020303035323731313836423042383130393331333032453336324533343245333133333646303438393032333033303632303338313031333033363436443542363436304631394341303434303938393132323030303045354435444131393431364237343934");
+        //Console.WriteLine("\nParsed Fields:");
+        //foreach (var field in parsedFields)
+        //{
+        //    Console.WriteLine($"Field {field.Key.ToString().PadLeft(3)}: {field.Value}");
+        //}
+
+        //*************************
+
+        var pan = "5022291045047691";
+        var pinKey = "26731FC823C802B6";
+        var macKey = "BFB92AA7CBEC3B3D";
+        var pinBlock = CreatePinBlock("1273", pan, pinKey);
+
+        // توجه: در Iso8583Builder طول فیلد 42 را روی 16 بگذارید (دقیقاً مطابق عکس اول)
+        //Dictionary<int, string> myFields = new Dictionary<int, string>
+        //{
+        //    { 2, "5022291045047691" },
+        //    { 3, "310000" },
+        //    { 7, "0512125853" },
+        //    { 11, "125853" },
+        //    { 12, "125853" },
+        //    { 13, "0512" },
+        //    { 14, "0606" },
+        //    { 15, "0512" },
+        //    { 22, "021" },
+        //    { 23, "000" },
+        //    { 25, "43" },
+        //    { 32, "504706" },
+        //    { 35, "5022291045047691=27081205018112999839" },
+        //    { 41, "00017002" },
+        //    { 42, "01002894" },
+        //    { 48, "71186B0B810931302E362E342E31336F04890230306203810130" },
+        //    { 49, "364" },
+        //    { 52, pinBlock },
+        //    { 100, "891220000" },
+        //};
+
+        string track2 = "5022291045047691=27081205018112999839";
+        string addfld = "71186B0B810931302E362E342E31336F04890230306203810130";
+        Dictionary<int, string> myFields = new Dictionary<int, string>
+        {
+            { 2, "5022291045047691" },
+            { 3, "310000" },
+            { 7, "0512125853" },
+            { 11, "125853" },
+            { 12, "125853" },
+            { 13, "0512" },
+            { 14, "0606" },
+            { 15, "0512" },
+            { 22, "021" },
+            { 23, "000" },
+            { 25, "43" },
+            { 32, "504706" },
+            { 35, track2.Length.ToString().PadLeft(2, '0') + track2 },
+            { 41, "00017002".Length.ToString().PadLeft(8, '0') + "00017002" },
+            { 42, "01002894".Length.ToString().PadLeft(15, '0') + "01002894" },
+            { 48, addfld.Length.ToString().PadLeft(4, '0') + addfld },
+            { 49, "364" },
+            { 52, pinBlock },
+            { 100, "891220000".Length.ToString().PadLeft(2, '0') + "891220000" },
+        };
+
+
+        myFields[128] = "0000000000000000";
+        string hexWithoutLen = Iso8583Builder.Build("0200", myFields, includeTcpLength: false);
+        string hexWithLen = Iso8583Builder.Build("0200", myFields, includeTcpLength: true);
+
+        byte[] mabNoLen = HexByte.HexToBytes(hexWithoutLen)[..^16];
+        byte[] mabWithLen = HexByte.HexToBytes(hexWithLen)[..^16];
+
+        Console.WriteLine("Target MAC: 68A6D799F814DE2F\n");
+
+        // 1. DES-CBC بدون هدر طول + پدینگ 0x00 (ANSI X9.9)
+        Console.WriteLine("1. CBC NoLen Pad00   : " + CalcDesCbc(mabNoLen, macKey, false));
+        // 2. DES-CBC بدون هدر طول + پدینگ 0x80 (ISO 9797-1 M2)
+        Console.WriteLine("2. CBC NoLen Pad80   : " + CalcDesCbc(mabNoLen, macKey, true));
+        // 3. DES-CBC با هدر طول + پدینگ 0x00
+        Console.WriteLine("3. CBC WithLen Pad00 : " + CalcDesCbc(mabWithLen, macKey, false));
+        // 4. DES-CBC با هدر طول + پدینگ 0x80
+        Console.WriteLine("4. CBC WithLen Pad80 : " + CalcDesCbc(mabWithLen, macKey, true));
+        // 5. XOR کل بلوک‌ها + یک بار DES-ECB (بسیار رایج در پوز و سوئیچ ایران)
+        Console.WriteLine("5. XOR + ECB NoLen   : " + CalcXorDes(mabNoLen, macKey));
+
+        Console.WriteLine("6. XOR + ECB WithLen : " + CalcXorDes(mabWithLen, macKey));
+        // 7. تبدیل نتیجه باینری MAC به 8 بایت ASCII (اگر سوئیچ 4 بایت اول را هگز کند)
+
+
+        var trr = ISOUtil.hex2byte(CalcXorDes(mabWithLen, macKey));
+
+        byte[] v = CalculateMACVeri(ISOUtil.hex2byte(macKey), ISOUtil.hex2byte(CalcXorDes(mabWithLen, macKey)));
+
+        if (!trr.SequenceEqual(v))
+        {
+            Console.WriteLine("Mac has not been verified.");
+            //throw new Exception("Mac has not been verified.");
+        }
+        else
+        {
+            Console.WriteLine("Mac has been verified.");
+        }
+
+
+    }
+}
+
+
+
+
+
